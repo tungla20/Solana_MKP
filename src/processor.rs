@@ -9,13 +9,13 @@ use solana_program::{
     program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
-    system_instruction,
+    system_instruction::{self, transfer},
     sysvar::{rent::Rent, Sysvar},
 };
 
 use crate::{
     error,
-    instruction::{GachaMarketplaceInstruction, self},
+    instruction::{self, GachaMarketplaceInstruction},
     state::{MarketItem, State},
 };
 
@@ -26,10 +26,8 @@ impl Processor {
         accounts: &[AccountInfo],
         instruction_data: &[u8],
     ) -> ProgramResult {
-        println!("------------------");
         // let instruction: GachaMarketplaceInstruction = try_from_slice_unchecked(instruction_data)?;
         let instruction = GachaMarketplaceInstruction::unpack(instruction_data)?;
-        println!("------------------");
         println!("//////////////////");
         println!("{:?}", instruction);
         println!("//////////////////");
@@ -65,11 +63,17 @@ impl Processor {
                 price,
                 fee,
             } => Self::gacha(accounts, program_id, nft_contract, qty, price, fee),
-            GachaMarketplaceInstruction::InitState {} => Self::init_state(accounts, program_id),
+            GachaMarketplaceInstruction::InitState { listing_price } => {
+                Self::init_state(accounts, program_id, listing_price)
+            }
         }
     }
 
-    fn init_state(accounts: &[AccountInfo], program_id: &Pubkey) -> ProgramResult {
+    fn init_state(
+        accounts: &[AccountInfo],
+        program_id: &Pubkey,
+        _listing_price: u128,
+    ) -> ProgramResult {
         println!("111111111111111111");
         let account_info_iter = &mut accounts.iter();
 
@@ -102,7 +106,7 @@ impl Processor {
             program_id,
         );
 
-        msg!("Creating MapAccount account");
+        // msg!("Creating MapAccount account");
         invoke_signed(
             create_map_ix,
             &[
@@ -122,9 +126,11 @@ impl Processor {
         state.item_sold = 0;
         state.owner = *authority_account.key;
         state.seed = 99999999999;
+        state.listing_price = _listing_price;
 
         // msg!("Serializing MapAccount account");
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
+
         Ok(())
     }
 
@@ -132,7 +138,7 @@ impl Processor {
         accounts: &[AccountInfo],
         program_id: &Pubkey,
         _nft_contract: Pubkey, // program id,
-        _token_id: Pubkey,     // ATA
+        _mint_address: Pubkey, // ATA
         _price: u128,
         _file_name: String,
         _description: String,
@@ -159,7 +165,7 @@ impl Processor {
         let item: MarketItem = MarketItem {
             item_id: state.item_ids,
             nft_contract: _nft_contract,
-            token_id: _token_id,
+            mint_address: _mint_address,
             seller: *authority_account.key,
             owner: None,
             price: _price,
@@ -170,8 +176,11 @@ impl Processor {
             gacha: false,
         };
 
-        state.map.insert(state.item_ids, item);
+        state.map.insert(state.item_ids, item.clone());
+        state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
 
+        // transfer nft from sender to this contract
+        // spl_token::instruction::transfer(token_program_id, source_pubkey, destination_pubkey, authority_pubkey, signer_pubkeys, amount)
         Ok(())
     }
 
@@ -196,22 +205,38 @@ impl Processor {
 
         let mut item = state.map.get(&_item_id).unwrap().to_owned();
         let price = item.price;
-        let token_id = item.token_id;
+        let mint_address = item.mint_address;
 
         if _price != price {
             return Err(error::GachaError::InvalidPayment.into());
         }
 
         // transfer price to seller
+        // need item.seller accountInfo
+        invoke(
+            &transfer(
+                authority_account.key,
+                &item.seller,
+                1000.try_into().unwrap(),
+            ),
+            &[authority_account.to_owned(), state_account.to_owned()],
+        )?;
+
         // transfer nft from contract to sender
 
         item.owner = Some(*authority_account.key);
         item.sold = true;
 
         // transfer listing price to owner
+        // need owner accountInfo
+        transfer(
+            authority_account.key,
+            &state.owner,
+            state.listing_price.try_into().unwrap(),
+        );
 
         state.item_sold += 1;
-
+        state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
         Ok(())
     }
 
@@ -267,7 +292,7 @@ impl Processor {
             let item_id = gacha_items.get(&i).unwrap().item_id;
             let mut selected_item = state.map.get(&item_id).unwrap().to_owned();
             let price = selected_item.price;
-            let token_id = selected_item.token_id;
+            let mint_address = selected_item.mint_address;
 
             // transfer nft
 
@@ -275,18 +300,10 @@ impl Processor {
             selected_item.gacha = true;
         }
 
-        // transfer fee to seller map[0]
+        // transfer fee to seller map[0] // accountInfo receiver
 
         state.item_sold += 1;
-        /*
-        items[MarketItem; unsold_item_count] // =price + owner != none
-        gacha_items[MarketItem; _qty] // random get item from items to gacha_items
-        transfer all nft in gacha_items to sender
-            .owner = sender
-            .gacha = true
-        transfer fee to MarketItem[0].seller
-        ctx.accounts.items_sold.count ++
-        */
+        state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
         Ok(())
     }
 
@@ -340,7 +357,7 @@ impl Processor {
 
         for i in 0.._qty {
             let item_id = gacha_items.get(&i).unwrap().to_owned().item_id;
-            let token_id = gacha_items.get(&i).unwrap().to_owned().token_id;
+            let mint_address = gacha_items.get(&i).unwrap().to_owned().mint_address;
 
             // transfer nft
 
@@ -351,17 +368,7 @@ impl Processor {
             state.item_sold += 1;
         }
 
-        // let mut map_state = anchor_lang::solana_program::borsh::try_from_slice_unchecked:: <MapAccount>(&map_account.data.borrow())?;
-
-        /*
-        items[MarketItem; unsold_item_count] // owner != none
-        gacha_items[MarketItem; _qty] // random get item from items (items.len--) to gacha_items
-        transfer all nft in gacha_items to sender
-            .owner = sender
-            .gacha = true
-            ctx.accounts.items_sold.count ++
-            tranfer listing_price to owner of program_id
-        */
+        state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
         Ok(())
     }
 }

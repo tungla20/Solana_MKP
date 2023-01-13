@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use borsh::{BorshSerialize, BorshDeserialize};
-use solana_program::pubkey::Pubkey;
+use solana_program::{pubkey::Pubkey, account_info::AccountInfo};
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub struct MarketItem {
     pub item_id: u128,
     pub nft_contract: Pubkey, // program id,
-    pub token_id: Pubkey,     // ATA
+    pub mint_address: Pubkey,     // ATA
     pub seller: Pubkey,
     pub owner: Option<Pubkey>,
     pub price: u128,
@@ -18,13 +18,14 @@ pub struct MarketItem {
     pub gacha: bool,
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
+#[derive(Clone, Debug, BorshDeserialize, BorshSerialize)]
 pub struct State {
     pub map: BTreeMap<u128, MarketItem>, // 100
     pub item_ids: u128,
     pub item_sold: u128,
     pub owner: Pubkey,
     pub seed: u64,
+    pub listing_price: u128
 }
 
 impl State {
