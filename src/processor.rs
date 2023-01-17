@@ -22,12 +22,11 @@ use solana_program::{
     system_instruction::{self, transfer},
     sysvar::{rent::Rent, Sysvar},
 };
-use spl_token::{
-    instruction::{self as token_instruction, mint_to},
-};
 use spl_associated_token_account::{
-    instruction as token_account_instruction, get_associated_token_address, get_associated_token_address_with_program_id,
+    get_associated_token_address, get_associated_token_address_with_program_id,
+    instruction as token_account_instruction,
 };
+use spl_token::instruction::{self as token_instruction, mint_to};
 
 pub struct Processor;
 impl Processor {
@@ -193,8 +192,11 @@ impl Processor {
 
         state.map.insert(state.item_ids, item.clone());
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
-        
-        let token_address = get_associated_token_address_with_program_id(authority_account.key, &_mint_address, program_id);
+
+        let token_address = get_associated_token_address(
+            authority_account.key,
+            &_mint_address,
+        );
         // transfer nft from sender to this contract
         invoke(
             &spl_token::instruction::transfer_checked(
