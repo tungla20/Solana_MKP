@@ -16,6 +16,8 @@ pub enum GachaError {
     InvalidStateAccount,
     #[error("Account already has entry in Map")]
     AccountAlreadyHasEntry,
+    #[error("State already has been initialized")]
+    StateAlreadyInitialized,
 }
 impl From<GachaError> for ProgramError {
     fn from(e: GachaError) -> Self {
@@ -42,7 +44,8 @@ impl PrintProgramError for GachaError {
             GachaError::CashbackMax => msg!("Error: Cash back should lower than 1"),
             GachaError::InvalidPayment => msg!("Error: Please submit the asking price in order to complete the purchase"),
             GachaError::InvalidStateAccount => msg!("Error: Invalid account"),
-            GachaError::AccountAlreadyHasEntry => msg!("Error: Account already has entry in Map")
+            GachaError::AccountAlreadyHasEntry => msg!("Error: Account already has entry in Map"),
+            GachaError::StateAlreadyInitialized => msg!("Error: State already has been initialized")
         }
     }
 }

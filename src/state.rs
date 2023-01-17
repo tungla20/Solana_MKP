@@ -6,8 +6,8 @@ use solana_program::{pubkey::Pubkey, account_info::AccountInfo};
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub struct MarketItem {
     pub item_id: u128,
-    pub nft_contract: Pubkey, // program id,
-    pub mint_address: Pubkey,     // ATA
+    pub token_program_id: Pubkey, // program id,
+    pub mint_address: Pubkey,
     pub seller: Pubkey,
     pub owner: Option<Pubkey>,
     pub price: u128,
@@ -24,8 +24,8 @@ pub struct State {
     pub item_ids: u128,
     pub item_sold: u128,
     pub owner: Pubkey,
-    pub seed: u64,
-    pub listing_price: u128
+    pub listing_price: u128,
+    pub initialized: bool
 }
 
 impl State {

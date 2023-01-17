@@ -15,37 +15,40 @@ use solana_program::pubkey::Pubkey;
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub enum GachaMarketplaceInstruction {
     CreateMarketItem {
-        nft_contract: Pubkey, // program id,
-        token_id: Pubkey,     // ATA
+        token_program_id: Pubkey, // program id,
+        mint_address: Pubkey,     // ATA
         price: u128,
         file_name: String,
         description: String,
         cash_back: u8,
     },
     PurchaseSale {
-        nft_contract: Pubkey, // program id
+        token_program_id: Pubkey, // program id
         price: u128,
         item_id: u128,
     },
     Gacha {
-        nft_contract: Pubkey,
+        token_program_id: Pubkey,
         qty: u8,
         price: u128,
         fee: u128,
     },
     CreateGacha {
-        nft_contract: Pubkey,
+        token_program_id: Pubkey,
         qty: u8,
     },
     InitState {
         listing_price: u128
     },
+    // FetchMarketItems {},
+    // FetchMyNFTs {},
+    // FetchItemsCreated {}
 }
 
 #[derive(BorshDeserialize, Debug)]
 struct GachaMarketplacePayload {
-    nft_contract: Pubkey, // program id,
-    token_id: Pubkey,     // ATA
+    token_program_id: Pubkey, // program id,
+    mint_address: Pubkey,     // ATA
     price: u128,
     file_name: String,
     description: String,
@@ -63,24 +66,24 @@ impl GachaMarketplaceInstruction {
         // Match the variant to determine which data struct is expected by
         Ok(match payload.variant {
             0 => Self::CreateMarketItem {
-                nft_contract: payload.nft_contract,
-                token_id: payload.token_id,
+                token_program_id: payload.token_program_id,
+                mint_address: payload.mint_address,
                 price: payload.price,
                 file_name: payload.file_name,
                 description: payload.description,
                 cash_back: payload.cash_back,
             },
             1 => Self::PurchaseSale {
-                nft_contract: payload.nft_contract,
+                token_program_id: payload.token_program_id,
                 price: payload.price,
                 item_id: payload.item_id,
             },
             2 => Self::CreateGacha {
-                nft_contract: payload.nft_contract,
+                token_program_id: payload.token_program_id,
                 qty: payload.qty,
             },
             3 => Self::Gacha {
-                nft_contract: payload.nft_contract,
+                token_program_id: payload.token_program_id,
                 qty: payload.qty,
                 price: payload.price,
                 fee: payload.fee,
@@ -88,6 +91,9 @@ impl GachaMarketplaceInstruction {
             4 => Self::InitState{
                 listing_price: payload.listing_price
             },
+            // 5 => Self::FetchMarketItems {},
+            // 6 => Self::FetchMyNFTs {},
+            // 7 => Self::FetchItemsCreated {},
             _ => return Err(ProgramError::InvalidInstructionData),
         })
     }

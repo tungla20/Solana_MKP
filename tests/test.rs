@@ -15,6 +15,7 @@ use solana_sdk::{
     program_pack::Pack, signature::Keypair, signer::Signer, system_instruction,
     transaction::Transaction,
 };
+use spl_associated_token_account::get_associated_token_address;
 use spl_token::{
     id, instruction,
     state::{Account, Mint},
@@ -49,9 +50,8 @@ async fn test_initialize_mint() {
         &mint_account.pubkey(),
         &payer.pubkey(),
         None,
-        1,
-    )
-    .unwrap();
+        0,
+    ).unwrap();
 
     // create mint transaction
     let token_mint_a_tx = Transaction::new_signed_with_payer(
@@ -97,7 +97,7 @@ async fn test_initialize_mint() {
         .unwrap();
 
     // Mint tokens into newly created account
-    let mint_amount: u64 = 10;
+    let mint_amount: u64 = 1;
     let mint_to_ix = instruction::mint_to(
         &token_program,
         &mint_account.pubkey(),
@@ -105,8 +105,7 @@ async fn test_initialize_mint() {
         &payer.pubkey(),
         &[],
         mint_amount.clone(),
-    )
-    .unwrap();
+    ).unwrap();
 
     let mint_to_tx = Transaction::new_signed_with_payer(
         &[mint_to_ix],
@@ -130,30 +129,20 @@ async fn test_initialize_mint() {
         "not correct amount"
     );
 
-    let key = Pubkey::default();
-    let mut lamports = 0;
-    let mut data = vec![
-        0;
-        mem::size_of::<u128>()
-            + mem::size_of::<Pubkey>()
-            + mem::size_of::<Pubkey>()
-            + mem::size_of::<Pubkey>()
-            + 1
-            + mem::size_of::<u128>()
-            + 4
-            + 4
-            + mem::size_of::<u8>()
-            + mem::size_of::<bool>()
-            + mem::size_of::<bool>()
-    ];
-    let new_owner = Pubkey::default();
+    let rs = banks_client
+        .get_account(account_data.mint)
+        .await
+        .unwrap()
+        .expect("could not fetch account information");
+    println!("...........{:?}", rs);
 
-    // let state_account = Pubkey::default();
+    let other_user = Keypair::new();
+    let new_owner = Pubkey::default();
 
     #[derive(BorshDeserialize, BorshSerialize)]
     struct GachaMarketplacePayload {
-        nft_contract: Pubkey, // program id,
-        token_id: Pubkey,     // ATA
+        token_program_id: Pubkey, // program id,
+        mint_address: Pubkey,     // ATA
         price: u128,
         file_name: String,
         description: String,
@@ -166,27 +155,11 @@ async fn test_initialize_mint() {
     }
 
     let (state_pda, state_bump) = Pubkey::find_program_address(&[b"state".as_ref()], &program_id);
-    let state_account = AccountInfo::new(
-        &state_pda,
-        false,
-        true,
-        &mut lamports,
-        &mut data,
-        &new_owner,
-        false,
-        Epoch::default(),
-    );
-
-    let payer_account_before = banks_client
-        .get_account(payer.pubkey())
-        .await
-        .expect("get_account")
-        .expect("state_account not found");
 
     // INIT STATE
     let param_init_state = GachaMarketplacePayload {
-        nft_contract: new_owner, // program id,
-        token_id: new_owner,     // ATA
+        token_program_id: *token_program, // program id,
+        mint_address: token_account.pubkey(),     // ATA
         price: 1,
         file_name: "zxczxc".to_string(),
         description: "zxczxc".to_string(),
@@ -203,7 +176,7 @@ async fn test_initialize_mint() {
             &param_init_state,
             vec![
                 AccountMeta::new(payer.pubkey(), true),
-                AccountMeta::new(*state_account.key, false),
+                AccountMeta::new(state_pda, false),
                 AccountMeta::new(system_program::ID, false),
             ],
         )],
@@ -226,19 +199,18 @@ async fn test_initialize_mint() {
         pub seed: u64,
     }
 
-    let new_state_account_after = banks_client
-        .get_account(*state_account.key)
-        .await
-        .expect("get_account")
-        .expect("state_account not found");
-    let state = try_from_slice_unchecked::<State>(&new_state_account_after.data).unwrap();
-    assert_eq!(state.seed, 99999999999);
-
+    // let new_state_account_after = banks_client
+    //     .get_account(other_user.pubkey())
+    //     .await
+    //     .expect("get_account")
+    //     .expect("state_account not found");
+    // assert_eq!(new_state_account_after.lamports, 5380080);
 
     // CREATE MARKET ITEM
+    let mint_key_pair = Keypair::new();
     let param_create_item = GachaMarketplacePayload {
-        nft_contract: new_owner, // program id,
-        token_id: new_owner,     // ATA
+        token_program_id: *token_program, // program id,
+        mint_address: token_account.pubkey(),     // ATA
         price: 1,
         file_name: "zxczxc".to_string(),
         description: "zxczxc".to_string(),
@@ -255,7 +227,7 @@ async fn test_initialize_mint() {
             &param_create_item,
             vec![
                 AccountMeta::new(payer.pubkey(), true),
-                AccountMeta::new(*state_account.key, false),
+                AccountMeta::new(state_pda, false),
                 AccountMeta::new(system_program::ID, false),
             ],
         )],
@@ -268,10 +240,18 @@ async fn test_initialize_mint() {
         Err(e) => panic!("{}", e),
     }
 
+    let new_state_account_after = banks_client
+        .get_account(other_user.pubkey())
+        .await
+        .expect("get_account")
+        .expect("state_account not found");
+    assert_eq!(new_state_account_after.lamports, 5381080);
+
+    // ANOTHER MARKET ITEM
     let param_create_item2 = GachaMarketplacePayload {
-        nft_contract: new_owner, // program id,
-        token_id: new_owner,     // ATA
-        price:3,
+        token_program_id: *token_program, // program id,
+        mint_address: token_account.pubkey(),     // ATA
+        price: 3,
         file_name: "file_name".to_string(),
         description: "file_name".to_string(),
         cash_back: 0,
@@ -287,7 +267,7 @@ async fn test_initialize_mint() {
             &param_create_item2,
             vec![
                 AccountMeta::new(payer.pubkey(), true),
-                AccountMeta::new(*state_account.key, false),
+                AccountMeta::new(state_pda, false),
                 AccountMeta::new(system_program::ID, false),
             ],
         )],
@@ -301,7 +281,7 @@ async fn test_initialize_mint() {
     }
 
     let new_state_account = banks_client
-        .get_account(*state_account.key)
+        .get_account(state_pda)
         .await
         .expect("get_account")
         .expect("state_account not found");
@@ -309,4 +289,38 @@ async fn test_initialize_mint() {
     assert_eq!(state.map.len(), 2);
     assert_eq!(state.map.get(&1).unwrap().file_name, "zxczxc");
 
+    // PURCHASE SALE
+    let param_create_item = GachaMarketplacePayload {
+        token_program_id: *token_program, // program id,
+        mint_address: token_account.pubkey(),     // ATA
+        price: 3,
+
+        file_name: "file_name".to_string(),
+        description: "file_name".to_string(),
+        cash_back: 0,
+        variant: 0,
+        qty: 0,
+        fee: 0,
+        item_id: 0,
+        listing_price: 0,
+    };
+    let mut transaction = Transaction::new_with_payer(
+        &[Instruction::new_with_borsh(
+            program_id,
+            &param_create_item,
+            vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(state_pda, false),
+                AccountMeta::new(state.map.get(&param_create_item.item_id).unwrap().seller, false),
+                AccountMeta::new(system_program::ID, false),
+            ],
+        )],
+        Some(&payer.pubkey()),
+    );
+    transaction.sign(&[&payer], recent_blockhash);
+
+    match banks_client.process_transaction(transaction).await {
+        Ok(()) => (),
+        Err(e) => panic!("{}", e),
+    }
 }

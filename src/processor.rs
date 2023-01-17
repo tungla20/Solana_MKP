@@ -1,22 +1,32 @@
-use std::collections::{BTreeMap, HashMap};
-
-use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::{
-    account_info::{next_account_info, AccountInfo},
-    borsh::try_from_slice_unchecked,
-    entrypoint::ProgramResult,
-    msg,
-    program::{invoke, invoke_signed},
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    system_instruction::{self, transfer},
-    sysvar::{rent::Rent, Sysvar},
+use std::{
+    collections::{BTreeMap, HashMap},
+    mem,
 };
 
 use crate::{
     error,
     instruction::{self, GachaMarketplaceInstruction},
     state::{MarketItem, State},
+};
+use borsh::{BorshDeserialize, BorshSerialize};
+use nanorand::{ChaCha, RNG};
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    borsh::try_from_slice_unchecked,
+    entrypoint::ProgramResult,
+    feature, msg,
+    program::{self, invoke, invoke_signed},
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    stake_history::Epoch,
+    system_instruction::{self, transfer},
+    sysvar::{rent::Rent, Sysvar},
+};
+use spl_token::{
+    instruction::{self as token_instruction, mint_to},
+};
+use spl_associated_token_account::{
+    instruction as token_account_instruction, get_associated_token_address,
 };
 
 pub struct Processor;
@@ -33,8 +43,8 @@ impl Processor {
         println!("//////////////////");
         match instruction {
             GachaMarketplaceInstruction::CreateMarketItem {
-                nft_contract, // program id,
-                token_id,     // ATA
+                token_program_id, // program id,
+                mint_address,     // ATA
                 price,
                 file_name,
                 description,
@@ -42,27 +52,28 @@ impl Processor {
             } => Self::create_market_item(
                 accounts,
                 program_id,
-                nft_contract, // program id,
-                token_id,     // ATA
+                token_program_id, // program id,
+                mint_address,     // ATA
                 price,
                 file_name,
                 description,
                 cash_back,
             ),
             GachaMarketplaceInstruction::PurchaseSale {
-                nft_contract,
+                token_program_id,
                 price,
                 item_id,
-            } => Self::purchase_sale(accounts, program_id, nft_contract, price, item_id),
-            GachaMarketplaceInstruction::CreateGacha { nft_contract, qty } => {
-                Self::create_gacha(accounts, program_id, nft_contract, qty)
-            }
+            } => Self::purchase_sale(accounts, program_id, token_program_id, price, item_id),
+            GachaMarketplaceInstruction::CreateGacha {
+                token_program_id,
+                qty,
+            } => Self::create_gacha(accounts, program_id, token_program_id, qty),
             GachaMarketplaceInstruction::Gacha {
-                nft_contract,
+                token_program_id,
                 qty,
                 price,
                 fee,
-            } => Self::gacha(accounts, program_id, nft_contract, qty, price, fee),
+            } => Self::gacha(accounts, program_id, token_program_id, qty, price, fee),
             GachaMarketplaceInstruction::InitState { listing_price } => {
                 Self::init_state(accounts, program_id, listing_price)
             }
@@ -119,14 +130,18 @@ impl Processor {
 
         // msg!("Deserializing MapAccount account");
         let mut state = try_from_slice_unchecked::<State>(&state_account.data.borrow()).unwrap();
+        if state.initialized == true {
+            return Err(error::GachaError::StateAlreadyInitialized.into());
+        }
+
         let empty_map: BTreeMap<u128, MarketItem> = BTreeMap::new();
 
         state.map = empty_map;
         state.item_ids = 0;
         state.item_sold = 0;
         state.owner = *authority_account.key;
-        state.seed = 99999999999;
         state.listing_price = _listing_price;
+        state.initialized = true;
 
         // msg!("Serializing MapAccount account");
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
@@ -137,8 +152,8 @@ impl Processor {
     fn create_market_item(
         accounts: &[AccountInfo],
         program_id: &Pubkey,
-        _nft_contract: Pubkey, // program id,
-        _mint_address: Pubkey, // ATA
+        _token_program_id: Pubkey, // program id,
+        _mint_address: Pubkey,     // ATA
         _price: u128,
         _file_name: String,
         _description: String,
@@ -148,11 +163,11 @@ impl Processor {
         if _cash_back >= 100 {
             return Err(error::GachaError::CashbackMax.into());
         }
-
         let account_info_iter = &mut accounts.iter();
 
         let authority_account = next_account_info(account_info_iter)?;
         let state_account = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !authority_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
@@ -164,7 +179,7 @@ impl Processor {
 
         let item: MarketItem = MarketItem {
             item_id: state.item_ids,
-            nft_contract: _nft_contract,
+            token_program_id: _token_program_id,
             mint_address: _mint_address,
             seller: *authority_account.key,
             owner: None,
@@ -178,9 +193,23 @@ impl Processor {
 
         state.map.insert(state.item_ids, item.clone());
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
-
+        
+        let token_address = get_associated_token_address(authority_account.key, &_mint_address);
         // transfer nft from sender to this contract
-        // spl_token::instruction::transfer(token_program_id, source_pubkey, destination_pubkey, authority_pubkey, signer_pubkeys, amount)
+        invoke(
+            &spl_token::instruction::transfer_checked(
+                &_token_program_id,
+                &authority_account.key,
+                &_mint_address,
+                &token_address,
+                authority_account.key,
+                &[authority_account.key],
+                1,
+                0,
+            )
+            .unwrap(),
+            &[authority_account.clone(), system_program.clone()],
+        )?;
         Ok(())
     }
 
@@ -196,11 +225,13 @@ impl Processor {
 
         let authority_account = next_account_info(account_info_iter)?;
         let state_account = next_account_info(account_info_iter)?;
+        let item_seller = next_account_info(account_info_iter)?;
+        let owner_account = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !authority_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
-
         let mut state = try_from_slice_unchecked::<State>(&state_account.data.borrow())?;
 
         let mut item = state.map.get(&_item_id).unwrap().to_owned();
@@ -217,23 +248,40 @@ impl Processor {
             &transfer(
                 authority_account.key,
                 &item.seller,
-                1000.try_into().unwrap(),
+                price.try_into().unwrap(),
             ),
-            &[authority_account.to_owned(), state_account.to_owned()],
+            &[authority_account.to_owned(), item_seller.to_owned()],
         )?;
-
+        println!("zxczxczczxczxczxc");
         // transfer nft from contract to sender
+        invoke(
+            &spl_token::instruction::transfer_checked(
+                &item.token_program_id,
+                &system_program.key,
+                &mint_address,
+                authority_account.key,
+                system_program.key,
+                &[system_program.key],
+                1,
+                0,
+            )
+            .unwrap(),
+            &[authority_account.clone(), system_program.clone()],
+        )?;
 
         item.owner = Some(*authority_account.key);
         item.sold = true;
 
         // transfer listing price to owner
         // need owner accountInfo
-        transfer(
-            authority_account.key,
-            &state.owner,
-            state.listing_price.try_into().unwrap(),
-        );
+        invoke(
+            &transfer(
+                authority_account.key,
+                &owner_account.key,
+                price.try_into().unwrap(),
+            ),
+            &[authority_account.to_owned(), owner_account.to_owned()],
+        )?;
 
         state.item_sold += 1;
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
@@ -252,6 +300,8 @@ impl Processor {
 
         let authority_account = next_account_info(account_info_iter)?;
         let state_account = next_account_info(account_info_iter)?;
+        let seller_0th_item_account = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !authority_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
@@ -263,7 +313,6 @@ impl Processor {
         let item_sold = state.item_sold;
         let unsold_item_count = item_count - item_sold;
         let mut current_index = 0;
-        let mut seed = state.seed;
 
         let mut items = HashMap::new();
         for i in 0..item_count {
@@ -277,12 +326,8 @@ impl Processor {
 
         let mut gacha_items = HashMap::new();
         for i in 0.._qty {
-            seed ^= seed >> 12;
-            seed ^= seed << 25;
-            seed ^= seed >> 27;
-            seed *= 0x2545F4914F6CDD1D;
-
-            let gacha_index = (seed % unsold_item_count as u64) as u128;
+            let mut rng = ChaCha::new(254);
+            let gacha_index = rng.generate_range(0, (unsold_item_count - 1) as u64) as u128;
             let item = state.map.get(&gacha_index).unwrap().to_owned();
             gacha_items.insert(i, item);
             items.remove(&gacha_index);
@@ -291,16 +336,40 @@ impl Processor {
         for i in 0.._qty {
             let item_id = gacha_items.get(&i).unwrap().item_id;
             let mut selected_item = state.map.get(&item_id).unwrap().to_owned();
-            let price = selected_item.price;
             let mint_address = selected_item.mint_address;
 
             // transfer nft
+            invoke(
+                &spl_token::instruction::transfer_checked(
+                    &selected_item.token_program_id,
+                    &system_program.key,
+                    &mint_address,
+                    authority_account.key,
+                    system_program.key,
+                    &[system_program.key],
+                    1,
+                    0,
+                )
+                .unwrap(),
+                &[authority_account.clone(), system_program.clone()],
+            )?;
 
             selected_item.owner = Some(*authority_account.key);
             selected_item.gacha = true;
         }
 
         // transfer fee to seller map[0] // accountInfo receiver
+        invoke(
+            &transfer(
+                authority_account.key,
+                &seller_0th_item_account.key,
+                _fee.try_into().unwrap(),
+            ),
+            &[
+                authority_account.to_owned(),
+                seller_0th_item_account.to_owned(),
+            ],
+        )?;
 
         state.item_sold += 1;
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
@@ -317,6 +386,8 @@ impl Processor {
 
         let authority_account = next_account_info(account_info_iter)?;
         let state_account = next_account_info(account_info_iter)?;
+        let owner_account = next_account_info(account_info_iter)?;
+        let system_program = next_account_info(account_info_iter)?;
 
         if !authority_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
@@ -328,7 +399,6 @@ impl Processor {
         let item_sold = state.item_sold;
         let unsold_item_count = item_count - item_sold;
         let mut current_index = 0;
-        let mut seed = state.seed;
 
         let mut items = HashMap::new();
         for i in 0..item_count {
@@ -343,12 +413,8 @@ impl Processor {
         let mut gacha_items = HashMap::new();
         let mut len = items.len();
         for i in 0.._qty {
-            seed ^= seed >> 12;
-            seed ^= seed << 25;
-            seed ^= seed >> 27;
-            seed *= 0x2545F4914F6CDD1D;
-
-            let index = (seed % len as u64) as u8;
+            let mut rng = ChaCha::new(254);
+            let index = rng.generate_range(0, len - 1);
             let item = items.get(&index).unwrap().to_owned();
             gacha_items.insert(i, item);
             items.remove(&index);
@@ -356,16 +422,39 @@ impl Processor {
         }
 
         for i in 0.._qty {
-            let item_id = gacha_items.get(&i).unwrap().to_owned().item_id;
-            let mint_address = gacha_items.get(&i).unwrap().to_owned().mint_address;
+            let item = gacha_items.get(&i).unwrap().to_owned();
+            let item_id = item.item_id;
+            let mint_address = item.mint_address;
 
             // transfer nft
+            invoke(
+                &spl_token::instruction::transfer_checked(
+                    &item.token_program_id,
+                    &system_program.key,
+                    &mint_address,
+                    authority_account.key,
+                    system_program.key,
+                    &[system_program.key],
+                    1,
+                    0,
+                )
+                .unwrap(),
+                &[authority_account.clone(), system_program.clone()],
+            )?;
 
             let mut item = state.map.get(&item_id).unwrap().to_owned();
             item.owner = Some(state.owner);
             item.gacha = true;
 
             state.item_sold += 1;
+            invoke(
+                &transfer(
+                    authority_account.key,
+                    &owner_account.key,
+                    state.listing_price.try_into().unwrap(),
+                ),
+                &[authority_account.to_owned(), owner_account.to_owned()],
+            )?;
         }
 
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
