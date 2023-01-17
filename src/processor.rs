@@ -194,7 +194,7 @@ impl Processor {
         state.map.insert(state.item_ids, item.clone());
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
         
-        let token_address = get_associated_token_address(authority_account.key, &_mint_address);
+        let token_address = get_associated_token_address(program_id, &_mint_address);
         // transfer nft from sender to this contract
         invoke(
             &spl_token::instruction::transfer_checked(
