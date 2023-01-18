@@ -15,7 +15,9 @@ use solana_sdk::{
     program_pack::Pack, signature::Keypair, signer::Signer, system_instruction,
     transaction::Transaction,
 };
-use spl_associated_token_account::get_associated_token_address;
+use spl_associated_token_account::{
+    get_associated_token_address, instruction::create_associated_token_account, ID
+};
 use spl_token::{
     id, instruction,
     state::{Account, Mint},
@@ -51,7 +53,8 @@ async fn test_initialize_mint() {
         &payer.pubkey(),
         None,
         0,
-    ).unwrap();
+    )
+    .unwrap();
 
     // create mint transaction
     let token_mint_a_tx = Transaction::new_signed_with_payer(
@@ -105,7 +108,8 @@ async fn test_initialize_mint() {
         &payer.pubkey(),
         &[],
         mint_amount.clone(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mint_to_tx = Transaction::new_signed_with_payer(
         &[mint_to_ix],
@@ -158,8 +162,8 @@ async fn test_initialize_mint() {
 
     // INIT STATE
     let param_init_state = GachaMarketplacePayload {
-        token_program_id: *token_program, // program id,
-        mint_address: token_account.pubkey(),     // ATA
+        token_program_id: *token_program,     // program id,
+        mint_address: token_account.pubkey(), // ATA
         price: 1,
         file_name: "zxczxc".to_string(),
         description: "zxczxc".to_string(),
@@ -205,12 +209,19 @@ async fn test_initialize_mint() {
     //     .expect("get_account")
     //     .expect("state_account not found");
     // assert_eq!(new_state_account_after.lamports, 5380080);
+    let new_account = Keypair::new();
+    let (nft_pda, nft_bump) = Pubkey::find_program_address(
+        &[b"nft".as_ref(), &token_account.pubkey().to_bytes()],
+        &program_id,
+    );
+
+    let mint_keypair = Keypair::new();
+    let token_address = get_associated_token_address(&mint_keypair.pubkey(), &payer.pubkey());
 
     // CREATE MARKET ITEM
-    let mint_key_pair = Keypair::new();
     let param_create_item = GachaMarketplacePayload {
-        token_program_id: *token_program, // program id,
-        mint_address: token_account.pubkey(),     // ATA
+        token_program_id: *token_program,     // program id,
+        mint_address: token_account.pubkey(), // ATA
         price: 1,
         file_name: "zxczxc".to_string(),
         description: "zxczxc".to_string(),
@@ -228,12 +239,17 @@ async fn test_initialize_mint() {
             vec![
                 AccountMeta::new(payer.pubkey(), true),
                 AccountMeta::new(state_pda, false),
-                AccountMeta::new(system_program::ID, false),
+                // AccountMeta::new(nft_pda, false),
+                AccountMeta::new(mint_keypair.pubkey(), true),
+                AccountMeta::new(token_account.pubkey(), false),
+                AccountMeta::new_readonly(id(), false),
+                AccountMeta::new_readonly(ID, false),
+                // AccountMeta::new(system_program::ID, false),
             ],
         )],
         Some(&payer.pubkey()),
     );
-    transaction.sign(&[&payer], recent_blockhash);
+    transaction.sign(&[&payer, &mint_keypair], recent_blockhash);
 
     match banks_client.process_transaction(transaction).await {
         Ok(()) => (),
@@ -249,8 +265,8 @@ async fn test_initialize_mint() {
 
     // ANOTHER MARKET ITEM
     let param_create_item2 = GachaMarketplacePayload {
-        token_program_id: *token_program, // program id,
-        mint_address: token_account.pubkey(),     // ATA
+        token_program_id: *token_program,     // program id,
+        mint_address: token_account.pubkey(), // ATA
         price: 3,
         file_name: "file_name".to_string(),
         description: "file_name".to_string(),
@@ -291,8 +307,8 @@ async fn test_initialize_mint() {
 
     // PURCHASE SALE
     let param_create_item = GachaMarketplacePayload {
-        token_program_id: *token_program, // program id,
-        mint_address: token_account.pubkey(),     // ATA
+        token_program_id: *token_program,     // program id,
+        mint_address: token_account.pubkey(), // ATA
         price: 3,
 
         file_name: "file_name".to_string(),
@@ -311,7 +327,10 @@ async fn test_initialize_mint() {
             vec![
                 AccountMeta::new(payer.pubkey(), true),
                 AccountMeta::new(state_pda, false),
-                AccountMeta::new(state.map.get(&param_create_item.item_id).unwrap().seller, false),
+                AccountMeta::new(
+                    state.map.get(&param_create_item.item_id).unwrap().seller,
+                    false,
+                ),
                 AccountMeta::new(system_program::ID, false),
             ],
         )],

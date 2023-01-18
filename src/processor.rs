@@ -24,8 +24,9 @@ use solana_program::{
 };
 use spl_associated_token_account::{
     get_associated_token_address, get_associated_token_address_with_program_id,
-    instruction as token_account_instruction,
+    instruction::create_associated_token_account,
 };
+
 use spl_token::instruction::{self as token_instruction, mint_to};
 
 pub struct Processor;
@@ -35,7 +36,6 @@ impl Processor {
         accounts: &[AccountInfo],
         instruction_data: &[u8],
     ) -> ProgramResult {
-        // let instruction: GachaMarketplaceInstruction = try_from_slice_unchecked(instruction_data)?;
         let instruction = GachaMarketplaceInstruction::unpack(instruction_data)?;
         println!("//////////////////");
         println!("{:?}", instruction);
@@ -48,16 +48,18 @@ impl Processor {
                 file_name,
                 description,
                 cash_back,
-            } => Self::create_market_item(
-                accounts,
-                program_id,
-                token_program_id, // program id,
-                mint_address,     // ATA
-                price,
-                file_name,
-                description,
-                cash_back,
-            ),
+            } => {
+                Self::create_market_item(
+                    accounts,
+                    program_id,
+                    token_program_id, // program id,
+                    mint_address,     // ATA
+                    price,
+                    file_name,
+                    description,
+                    cash_back,
+                )
+            },
             GachaMarketplaceInstruction::PurchaseSale {
                 token_program_id,
                 price,
@@ -166,7 +168,12 @@ impl Processor {
 
         let authority_account = next_account_info(account_info_iter)?;
         let state_account = next_account_info(account_info_iter)?;
-        let system_program = next_account_info(account_info_iter)?;
+        // let nft_account = next_account_info(account_info_iter)?;
+        let mint = next_account_info(account_info_iter)?;
+        let token_account = next_account_info(account_info_iter)?;
+        let token_program = next_account_info(account_info_iter)?;
+        let associated_token_program = next_account_info(account_info_iter)?;
+        // let system_program = next_account_info(account_info_iter)?;
 
         if !authority_account.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
@@ -193,21 +200,42 @@ impl Processor {
         state.map.insert(state.item_ids, item.clone());
         state.serialize(&mut &mut state_account.data.borrow_mut()[..])?;
 
-        let token_address = get_associated_token_address_with_program_id(authority_account.key, &_mint_address, &_token_program_id);
+        println!("mmmmmmm");
+        invoke(
+            &create_associated_token_account(
+                &authority_account.key,
+                &authority_account.key,
+                &mint.key,
+                &_token_program_id,
+            ),
+            &[
+                mint.clone(),
+                token_account.clone(),
+                authority_account.clone(),
+                token_program.clone(),
+                associated_token_program.clone()
+            ],
+        )?;
+        println!("mmmmmmm");
         // transfer nft from sender to this contract
         invoke(
             &spl_token::instruction::transfer_checked(
                 &_token_program_id,
                 &authority_account.key,
                 &_mint_address,
-                &token_address,
+                &token_account.key,
                 authority_account.key,
                 &[authority_account.key],
                 1,
                 0,
             )
             .unwrap(),
-            &[authority_account.clone(), system_program.clone()],
+            &[
+                authority_account.clone(),
+                mint.clone(),
+                token_account.clone(),
+                token_program.clone(),
+            ],
         )?;
         Ok(())
     }

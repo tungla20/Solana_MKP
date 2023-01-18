@@ -65,13 +65,16 @@ impl GachaMarketplaceInstruction {
         let payload = GachaMarketplacePayload::try_from_slice(input).unwrap();
         // Match the variant to determine which data struct is expected by
         Ok(match payload.variant {
-            0 => Self::CreateMarketItem {
-                token_program_id: payload.token_program_id,
-                mint_address: payload.mint_address,
-                price: payload.price,
-                file_name: payload.file_name,
-                description: payload.description,
-                cash_back: payload.cash_back,
+            0 => {
+                println!("??????????????");
+                Self::CreateMarketItem {
+                    token_program_id: payload.token_program_id,
+                    mint_address: payload.mint_address,
+                    price: payload.price,
+                    file_name: payload.file_name,
+                    description: payload.description,
+                    cash_back: payload.cash_back,
+                }
             },
             1 => Self::PurchaseSale {
                 token_program_id: payload.token_program_id,
